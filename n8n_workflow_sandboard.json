@@ -53,7 +53,7 @@
         "returnAll": false,
         "limit": 20,
         "filters": {
-          "q": "from:gometrix.com has:attachment newer_than:7d"
+          "q": "from:gometrix.dev has:attachment newer_than:7d"
         },
         "options": {}
       }
