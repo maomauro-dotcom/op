@@ -1,6 +1,6 @@
 {
   "createdAt": "2026-02-28T20:37:51.336Z",
-  "updatedAt": "2026-02-28T21:41:57.076Z",
+  "updatedAt": "2026-02-28T22:08:27.981Z",
   "id": "WXUIEL7prDCwdhIm",
   "name": "claude sandboard",
   "active": true,
@@ -12,8 +12,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        200,
-        300
+        160,
+        420
       ],
       "parameters": {
         "rule": {
@@ -32,13 +32,26 @@
       }
     },
     {
+      "id": "node-002",
+      "name": "Limpiar Datos Previos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// Limpiar datos de ejecuciones anteriores\nconst stored = $getWorkflowStaticData('global');\nstored.sprints = [];\nstored.runDate = new Date().toISOString();\nreturn $input.all();"
+      }
+    },
+    {
       "id": "3bd08e95-eda1-44f8-baad-baf858c521d7",
       "name": "Obtener Correos Sprint",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
       "position": [
-        440,
-        300
+        640,
+        420
       ],
       "credentials": {
         "gmailOAuth2": {
@@ -51,7 +64,7 @@
         "resource": "message",
         "operation": "getAll",
         "returnAll": false,
-        "limit": 20,
+        "limit": 30,
         "filters": {
           "q": "from:gometrix.dev has:attachment newer_than:7d"
         },
@@ -64,8 +77,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        680,
-        300
+        900,
+        420
       ],
       "parameters": {
         "batchSize": 1,
@@ -78,8 +91,8 @@
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
       "position": [
-        920,
-        180
+        1160,
+        260
       ],
       "credentials": {
         "gmailOAuth2": {
@@ -105,11 +118,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1160,
-        180
+        1420,
+        260
       ],
       "parameters": {
-        "jsCode": "const items = [];\nconst data = $input.first();\nconst binary = data.binary || {};\nconst attKeys = Object.keys(binary).filter(k => k.startsWith('attachment_'));\n\nif (attKeys.length === 0) {\n  return [{ json: { ...data.json, noAttachments: true } }];\n}\n\nfor (const key of attKeys) {\n  const mime = binary[key].mimeType || '';\n  const fname = binary[key].fileName || '';\n  if (mime.includes('pdf') || fname.toLowerCase().endsWith('.pdf')) {\n    items.push({\n      json: {\n        messageId: data.json.id,\n        subject: data.json.subject || '',\n        from: data.json.from || '',\n        fileName: fname || key\n      },\n      binary: { pdf_attachment: binary[key] }\n    });\n  }\n}\n\nreturn items.length > 0 ? items : [{ json: { ...data.json, noPdfs: true } }];"
+        "jsCode": "// Separar adjuntos PDF en items individuales\nconst items = [];\nconst data = $input.first();\nconst binary = data.binary || {};\nconst attKeys = Object.keys(binary).filter(k => k.startsWith('attachment_'));\n\nif (attKeys.length === 0) {\n  // Sin adjuntos: devolver item marcado para continuar el loop\n  return [{ json: { _skipPdf: true, subject: data.json.subject || '', from: data.json.from || '' } }];\n}\n\nfor (const key of attKeys) {\n  const mime = binary[key].mimeType || '';\n  const fname = (binary[key].fileName || key).toLowerCase();\n  if (mime.includes('pdf') || fname.endsWith('.pdf')) {\n    items.push({\n      json: {\n        subject: data.json.subject || '',\n        from: data.json.from || '',\n        fileName: binary[key].fileName || key\n      },\n      binary: { pdf_attachment: binary[key] }\n    });\n  }\n}\n\nreturn items.length > 0\n  ? items\n  : [{ json: { _skipPdf: true, subject: data.json.subject || '', from: data.json.from || '' } }];"
       }
     },
     {
@@ -118,8 +131,8 @@
       "type": "n8n-nodes-base.extractFromFile",
       "typeVersion": 1,
       "position": [
-        1400,
-        180
+        1680,
+        260
       ],
       "parameters": {
         "operation": "pdf",
@@ -127,18 +140,17 @@
       }
     },
     {
-      "id": "node-007",
-      "name": "Agregar Todos Los Sprints",
-      "type": "n8n-nodes-base.aggregate",
-      "typeVersion": 1,
+      "id": "node-009",
+      "name": "Acumular Sprint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        920,
-        500
+        1940,
+        260
       ],
       "parameters": {
-        "aggregate": "aggregateAllItemData",
-        "destinationFieldName": "sprints",
-        "options": {}
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Guardar texto de cada PDF en static data y continuar loop\nconst stored = $getWorkflowStaticData('global');\nif (!Array.isArray(stored.sprints)) stored.sprints = [];\n\nfor (const item of $input.all()) {\n  if (item.json._skipPdf) continue;\n  const text = (item.json.text || item.json.data || '').trim();\n  if (text.length > 20) {\n    stored.sprints.push({\n      text,\n      subject: item.json.subject || 'Sin asunto',\n      from:    item.json.from    || 'gometrix.dev',\n      fileName: item.json.fileName || 'sprint.pdf'\n    });\n  }\n}\n\n// Devolver UN solo item para continuar el loop de SplitInBatches\nreturn [{ json: { _acumulado: stored.sprints.length } }];"
       }
     },
     {
@@ -148,10 +160,10 @@
       "typeVersion": 2,
       "position": [
         1160,
-        500
+        600
       ],
       "parameters": {
-        "jsCode": "const allSprints = $json.sprints || [];\nconst fecha = new Date().toLocaleDateString('es-CO', {\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'\n});\n\nlet prompt = `FECHA DE REVISIÓN: ${fecha}\\nTOTAL DE REPORTES RECIBIDOS: ${allSprints.length}\\n\\n=== REPORTES DE SPRINT PARA ANÁLISIS ===\\n\\n`;\n\nallSprints.forEach((sprint, i) => {\n  const text = sprint.text || sprint.content || JSON.stringify(sprint);\n  const subject = sprint.subject || `Sprint ${i + 1}`;\n  const from = sprint.from || 'Gometrix';\n  const file = sprint.fileName || 'adjunto';\n  prompt += `--- REPORTE ${i + 1} ---\\nAsunto: ${subject}\\nDe: ${from}\\nArchivo: ${file}\\nContenido:\\n${text}\\n\\n`;\n});\n\nreturn [{ json: { prompt, sprintCount: allSprints.length, fecha, reportDate: new Date().toISOString() } }];"
+        "jsCode": "// Leer todos los sprints acumulados y construir prompt\nconst stored = $getWorkflowStaticData('global');\nconst sprints = stored.sprints || [];\nstored.sprints = []; // limpiar para siguiente ejecución\n\nconst fecha = new Date().toLocaleDateString('es-CO', {\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'\n});\n\nif (sprints.length === 0) {\n  return [{ json: {\n    prompt: `No se recibieron reportes de sprint con PDF esta semana (${fecha}). Por favor verificar que los correos de gometrix.dev tengan archivos PDF adjuntos.`,\n    sprintCount: 0, fecha\n  }}];\n}\n\nlet prompt = `FECHA DE REVISIÓN: ${fecha}\\nTOTAL DE REPORTES RECIBIDOS: ${sprints.length}\\n\\n=== REPORTES DE SPRINT PARA ANÁLISIS ===\\n\\n`;\n\nsprints.forEach((s, i) => {\n  prompt += `--- REPORTE ${i + 1} ---\\nAsunto: ${s.subject}\\nDe: ${s.from}\\nArchivo: ${s.fileName}\\n\\nContenido:\\n${s.text}\\n\\n`;\n});\n\nreturn [{ json: { prompt, sprintCount: sprints.length, fecha, reportDate: new Date().toISOString() } }];"
       }
     },
     {
@@ -160,15 +172,15 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 2.1,
       "position": [
-        1400,
-        500
+        1420,
+        600
       ],
       "parameters": {
         "agent": "conversationalAgent",
         "promptType": "define",
         "text": "={{ $json.prompt }}",
         "options": {
-          "systemMessage": "Eres un experto Board Manager de proyectos de software en Gometrix. Analiza los reportes de sprint recibidos por correo y crea un REPORTE BOARD MANAGER clasificando los equipos de más completo a menos completo.\n\nESTRUCTURA OBLIGATORIA:\n\n# REPORTE BOARD MANAGER — REVISIÓN DE SPRINTS GOMETRIX\n**Fecha:** [fecha del reporte]\n**Reportes Analizados:** [número total]\n\n---\n\n## RANKING DE COMPLETITUD DE SPRINTS\n\n### #1 [NOMBRE EQUIPO] — [XX%] Completitud\n**Descripción del sprint:** [3-4 líneas resumiendo el trabajo realizado]\n**Logros clave:**\n- [logro 1]\n- [logro 2]\n- [logro 3 máximo]\n**Áreas de mejora:**\n- [área 1]\n- [área 2 máximo]\n\n[Repetir bloque para cada sprint, de mayor a menor completitud]\n\n---\n\n## RESUMEN EJECUTIVO GLOBAL\n[Párrafo de 3-5 líneas sobre el estado general de todos los sprints esta semana]\n\n## RECOMENDACIONES PARA LA DIRECCIÓN\n1. [Recomendación accionable 1]\n2. [Recomendación accionable 2]\n3. [Recomendación accionable 3]\n4. [Recomendación accionable 4 — opcional]\n5. [Recomendación accionable 5 — opcional]\n\n## ALERTAS Y RIESGOS CRÍTICOS\n- [Riesgo o bloqueo identificado — si no hay, escribir \"Sin alertas críticas esta semana\"]\n\n---\nUsa tono profesional y ejecutivo. Sé específico con datos y porcentajes cuando los reportes los incluyan. Si un reporte no tiene porcentaje de completitud explícito, estímalo basándote en el contenido.",
+          "systemMessage": "Eres un experto Board Manager de proyectos de software en Gometrix. Analiza los reportes de sprint recibidos por correo y crea un REPORTE BOARD MANAGER clasificando los equipos de más completo a menos completo.\n\nESTRUCTURA OBLIGATORIA:\n\n# REPORTE BOARD MANAGER — REVISIÓN DE SPRINTS GOMETRIX\n**Fecha:** [fecha del reporte]\n**Reportes Analizados:** [número total]\n\n---\n\n## RANKING DE COMPLETITUD DE SPRINTS\n\n### #1 [NOMBRE EQUIPO] — [XX%] Completitud\n**Descripción del sprint:** [3-4 líneas resumiendo el trabajo realizado]\n**Logros clave:**\n- [logro 1]\n- [logro 2]\n- [logro 3 máximo]\n**Áreas de mejora:**\n- [área 1]\n- [área 2 máximo]\n\n[Repetir bloque para cada sprint, de mayor a menor completitud]\n\n---\n\n## RESUMEN EJECUTIVO GLOBAL\n[Párrafo de 3-5 líneas sobre el estado general de todos los sprints esta semana]\n\n## RECOMENDACIONES PARA LA DIRECCIÓN\n1. [Recomendación accionable 1]\n2. [Recomendación accionable 2]\n3. [Recomendación accionable 3]\n\n## ALERTAS Y RIESGOS CRÍTICOS\n- [Riesgo o bloqueo identificado — si no hay, escribir \"Sin alertas críticas esta semana\"]\n\n---\nUsa tono profesional y ejecutivo. Sé específico con datos y porcentajes cuando los reportes los incluyan. Si un reporte no tiene porcentaje de completitud explícito, estímalo basándote en el contenido.",
           "maxIterations": 5
         }
       }
@@ -179,8 +191,8 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.3,
       "position": [
-        1400,
-        720
+        1420,
+        820
       ],
       "credentials": {
         "openAiApi": {
@@ -202,8 +214,8 @@
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
       "position": [
-        1640,
-        500
+        1680,
+        600
       ],
       "credentials": {
         "gmailOAuth2": {
@@ -218,13 +230,24 @@
         "sendTo": "mauricio.hena@gometrix.dev",
         "subject": "=📊 Board Manager Report – Sprints Gometrix {{ $now.format('dd/MM/yyyy') }}",
         "emailType": "html",
-        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:800px;margin:auto;padding:24px;color:#222\">\n{{ $json.output\n  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')\n  .replace(/\\n/g,'<br>')\n  .replace(/^# (.+)/gm,'<h1 style=\"color:#1a3c5e;border-bottom:2px solid #1a3c5e;padding-bottom:4px\">$1</h1>')\n  .replace(/^## (.+)/gm,'<h2 style=\"color:#1a3c5e;margin-top:20px\">$1</h2>')\n  .replace(/^### (.+)/gm,'<h3 style=\"color:#2e6da4\">$1</h3>')\n  .replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>')\n}}\n<hr style=\"margin-top:32px;border:none;border-top:1px solid #ddd\">\n<p style=\"color:#888;font-size:11px;margin-top:8px\">\n  Reporte generado automáticamente · Gometrix AI Board Manager · {{ $now.format('dd/MM/yyyy HH:mm') }}\n</p></div>",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:840px;margin:auto;padding:28px;color:#1a1a1a;line-height:1.6\">\n{{ $json.output\n  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')\n  .replace(/\n/g,'<br>')\n  .replace(/^# (.+)/gm,'<h1 style=\"color:#1a3c5e;border-bottom:2px solid #1a3c5e;padding-bottom:6px;margin-top:0\">$1</h1>')\n  .replace(/^## (.+)/gm,'<h2 style=\"color:#1a3c5e;margin-top:24px\">$1</h2>')\n  .replace(/^### (.+)/gm,'<h3 style=\"color:#2e6da4;margin-top:16px\">$1</h3>')\n  .replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>')\n  .replace(/^- (.+)/gm,'&bull; $1')\n}}\n<hr style=\"margin-top:36px;border:none;border-top:1px solid #ddd\">\n<p style=\"color:#999;font-size:11px\">Generado automáticamente · Gometrix AI Board Manager · {{ $now.format('dd/MM/yyyy HH:mm') }}</p>\n</div>",
         "options": {}
       }
     }
   ],
   "connections": {
     "Viernes Medianoche": {
+      "main": [
+        [
+          {
+            "node": "Limpiar Datos Previos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpiar Datos Previos": {
       "main": [
         [
           {
@@ -257,7 +280,7 @@
         ],
         [
           {
-            "node": "Agregar Todos Los Sprints",
+            "node": "Preparar Prompt Board Manager",
             "type": "main",
             "index": 0
           }
@@ -290,18 +313,18 @@
       "main": [
         [
           {
-            "node": "Procesar Por Lotes",
+            "node": "Acumular Sprint",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Agregar Todos Los Sprints": {
+    "Acumular Sprint": {
       "main": [
         [
           {
-            "node": "Preparar Prompt Board Manager",
+            "node": "Procesar Por Lotes",
             "type": "main",
             "index": 0
           }
@@ -354,7 +377,7 @@
     "templateCredsSetupCompleted": true
   },
   "pinData": {},
-  "versionId": "4bb48642-081b-4df5-a8a8-72b7ded1cd7e",
+  "versionId": "1bc38a7c-fa9b-4ffa-8635-07f892efd925",
   "triggerCount": 1,
   "shared": [
     {
