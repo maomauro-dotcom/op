@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "n8n-mcp": {
+      "command": "npx",
+      "args": ["-y", "n8n-mcp"],
+      "env": {
+        "N8N_API_URL": "https://botia-n8n.egrd7y.easypanel.host:5678",
+        "N8N_API_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmY2VhNGNmYi1lZTU1LTRiNjAtOTgxOC1jNjAyOTlmOGU5YmEiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzcyMzA4NDQxfQ.oicEGnvszHhTkkWeRHDokKY052-eFjuBxUJfyD6jW2Q"
+      }
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
