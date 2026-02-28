@@ -1,0 +1,425 @@
+{
+  "createdAt": "2026-02-28T20:37:51.336Z",
+  "updatedAt": "2026-02-28T21:41:57.076Z",
+  "id": "WXUIEL7prDCwdhIm",
+  "name": "claude sandboard",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "node-001",
+      "name": "Viernes Medianoche",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                5
+              ],
+              "triggerAtHour": 0,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3bd08e95-eda1-44f8-baad-baf858c521d7",
+      "name": "Obtener Correos Sprint",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "BcCP5GZ88MtfQNIj",
+          "name": "Gmail account"
+        }
+      },
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 20,
+        "filters": {
+          "q": "from:gometrix.com has:attachment newer_than:7d"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-003",
+      "name": "Procesar Por Lotes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "14e0ebf6-9124-4a4a-bacf-e43b99fefa03",
+      "name": "Descargar Adjuntos PDF",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        920,
+        180
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "BcCP5GZ88MtfQNIj",
+          "name": "Gmail account"
+        }
+      },
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "get",
+        "messageId": "={{ $json.id }}",
+        "format": "full",
+        "options": {
+          "downloadAttachments": true,
+          "dataPropertyAttachmentsPrefixName": "attachment_"
+        }
+      }
+    },
+    {
+      "id": "node-005",
+      "name": "Separar Adjuntos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const items = [];\nconst data = $input.first();\nconst binary = data.binary || {};\nconst attKeys = Object.keys(binary).filter(k => k.startsWith('attachment_'));\n\nif (attKeys.length === 0) {\n  return [{ json: { ...data.json, noAttachments: true } }];\n}\n\nfor (const key of attKeys) {\n  const mime = binary[key].mimeType || '';\n  const fname = binary[key].fileName || '';\n  if (mime.includes('pdf') || fname.toLowerCase().endsWith('.pdf')) {\n    items.push({\n      json: {\n        messageId: data.json.id,\n        subject: data.json.subject || '',\n        from: data.json.from || '',\n        fileName: fname || key\n      },\n      binary: { pdf_attachment: binary[key] }\n    });\n  }\n}\n\nreturn items.length > 0 ? items : [{ json: { ...data.json, noPdfs: true } }];"
+      }
+    },
+    {
+      "id": "node-006",
+      "name": "Extraer Texto PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        180
+      ],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "pdf_attachment"
+      }
+    },
+    {
+      "id": "node-007",
+      "name": "Agregar Todos Los Sprints",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        920,
+        500
+      ],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "sprints",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-008",
+      "name": "Preparar Prompt Board Manager",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        500
+      ],
+      "parameters": {
+        "jsCode": "const allSprints = $json.sprints || [];\nconst fecha = new Date().toLocaleDateString('es-CO', {\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'\n});\n\nlet prompt = `FECHA DE REVISIÓN: ${fecha}\\nTOTAL DE REPORTES RECIBIDOS: ${allSprints.length}\\n\\n=== REPORTES DE SPRINT PARA ANÁLISIS ===\\n\\n`;\n\nallSprints.forEach((sprint, i) => {\n  const text = sprint.text || sprint.content || JSON.stringify(sprint);\n  const subject = sprint.subject || `Sprint ${i + 1}`;\n  const from = sprint.from || 'Gometrix';\n  const file = sprint.fileName || 'adjunto';\n  prompt += `--- REPORTE ${i + 1} ---\\nAsunto: ${subject}\\nDe: ${from}\\nArchivo: ${file}\\nContenido:\\n${text}\\n\\n`;\n});\n\nreturn [{ json: { prompt, sprintCount: allSprints.length, fecha, reportDate: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "2bbcdb9f-7b61-4db3-928a-941081fc7b93",
+      "name": "AI Board Manager",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.1,
+      "position": [
+        1400,
+        500
+      ],
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "options": {
+          "systemMessage": "Eres un experto Board Manager de proyectos de software en Gometrix. Analiza los reportes de sprint recibidos por correo y crea un REPORTE BOARD MANAGER clasificando los equipos de más completo a menos completo.\n\nESTRUCTURA OBLIGATORIA:\n\n# REPORTE BOARD MANAGER — REVISIÓN DE SPRINTS GOMETRIX\n**Fecha:** [fecha del reporte]\n**Reportes Analizados:** [número total]\n\n---\n\n## RANKING DE COMPLETITUD DE SPRINTS\n\n### #1 [NOMBRE EQUIPO] — [XX%] Completitud\n**Descripción del sprint:** [3-4 líneas resumiendo el trabajo realizado]\n**Logros clave:**\n- [logro 1]\n- [logro 2]\n- [logro 3 máximo]\n**Áreas de mejora:**\n- [área 1]\n- [área 2 máximo]\n\n[Repetir bloque para cada sprint, de mayor a menor completitud]\n\n---\n\n## RESUMEN EJECUTIVO GLOBAL\n[Párrafo de 3-5 líneas sobre el estado general de todos los sprints esta semana]\n\n## RECOMENDACIONES PARA LA DIRECCIÓN\n1. [Recomendación accionable 1]\n2. [Recomendación accionable 2]\n3. [Recomendación accionable 3]\n4. [Recomendación accionable 4 — opcional]\n5. [Recomendación accionable 5 — opcional]\n\n## ALERTAS Y RIESGOS CRÍTICOS\n- [Riesgo o bloqueo identificado — si no hay, escribir \"Sin alertas críticas esta semana\"]\n\n---\nUsa tono profesional y ejecutivo. Sé específico con datos y porcentajes cuando los reportes los incluyan. Si un reporte no tiene porcentaje de completitud explícito, estímalo basándote en el contenido.",
+          "maxIterations": 5
+        }
+      }
+    },
+    {
+      "id": "714c2da2-5e60-46d6-b54a-ca45d93102ab",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1400,
+        720
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "zazPVE8L8qw6s0pH",
+          "name": "OpenAi account"
+        }
+      },
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 4000
+        }
+      }
+    },
+    {
+      "id": "86bfaf7b-d020-4578-a73e-7e4cc10752df",
+      "name": "Enviar Reporte Al Director",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1640,
+        500
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "BcCP5GZ88MtfQNIj",
+          "name": "Gmail account"
+        }
+      },
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "mauricio.hena@gometrix.dev",
+        "subject": "=📊 Board Manager Report – Sprints Gometrix {{ $now.format('dd/MM/yyyy') }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:800px;margin:auto;padding:24px;color:#222\">\n{{ $json.output\n  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')\n  .replace(/\\n/g,'<br>')\n  .replace(/^# (.+)/gm,'<h1 style=\"color:#1a3c5e;border-bottom:2px solid #1a3c5e;padding-bottom:4px\">$1</h1>')\n  .replace(/^## (.+)/gm,'<h2 style=\"color:#1a3c5e;margin-top:20px\">$1</h2>')\n  .replace(/^### (.+)/gm,'<h3 style=\"color:#2e6da4\">$1</h3>')\n  .replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>')\n}}\n<hr style=\"margin-top:32px;border:none;border-top:1px solid #ddd\">\n<p style=\"color:#888;font-size:11px;margin-top:8px\">\n  Reporte generado automáticamente · Gometrix AI Board Manager · {{ $now.format('dd/MM/yyyy HH:mm') }}\n</p></div>",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Viernes Medianoche": {
+      "main": [
+        [
+          {
+            "node": "Obtener Correos Sprint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Correos Sprint": {
+      "main": [
+        [
+          {
+            "node": "Procesar Por Lotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar Por Lotes": {
+      "main": [
+        [
+          {
+            "node": "Descargar Adjuntos PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agregar Todos Los Sprints",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar Adjuntos PDF": {
+      "main": [
+        [
+          {
+            "node": "Separar Adjuntos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar Adjuntos": {
+      "main": [
+        [
+          {
+            "node": "Extraer Texto PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Texto PDF": {
+      "main": [
+        [
+          {
+            "node": "Procesar Por Lotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agregar Todos Los Sprints": {
+      "main": [
+        [
+          {
+            "node": "Preparar Prompt Board Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Prompt Board Manager": {
+      "main": [
+        [
+          {
+            "node": "AI Board Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Board Manager": {
+      "main": [
+        [
+          {
+            "node": "Enviar Reporte Al Director",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4o": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Board Manager",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Viernes Medianoche": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "4bb48642-081b-4df5-a8a8-72b7ded1cd7e",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "createdAt": "2026-02-28T20:37:51.341Z",
+      "updatedAt": "2026-02-28T20:37:51.341Z",
+      "role": "workflow:owner",
+      "workflowId": "WXUIEL7prDCwdhIm",
+      "projectId": "j2IpAZbBkHdLsBUJ",
+      "project": {
+        "createdAt": "2025-10-27T18:01:14.985Z",
+        "updatedAt": "2025-10-27T18:04:51.937Z",
+        "id": "j2IpAZbBkHdLsBUJ",
+        "name": "Javier Mauricio Henao Gutiérrez <procivilfp@aol.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "projectRelations": [
+          {
+            "createdAt": "2025-10-27T18:01:14.986Z",
+            "updatedAt": "2025-10-27T18:01:14.986Z",
+            "role": "project:personalOwner",
+            "userId": "fcea4cfb-ee55-4b60-9818-c60299f8e9ba",
+            "projectId": "j2IpAZbBkHdLsBUJ",
+            "user": {
+              "createdAt": "2025-10-27T18:01:14.637Z",
+              "updatedAt": "2026-02-28T19:51:13.000Z",
+              "id": "fcea4cfb-ee55-4b60-9818-c60299f8e9ba",
+              "email": "procivilfp@aol.com",
+              "firstName": "Javier Mauricio",
+              "lastName": "Henao Gutiérrez",
+              "personalizationAnswers": {
+                "version": "v4",
+                "personalization_survey_submitted_at": "2025-10-27T18:05:39.677Z",
+                "personalization_survey_n8n_version": "1.103.2",
+                "automationGoalDevops": [
+                  "cloud-infrastructure-orchestration"
+                ],
+                "companyIndustryExtended": [
+                  "security-industry"
+                ],
+                "companySize": "100-499",
+                "companyType": "other",
+                "role": "engineering",
+                "reportedSource": "google"
+              },
+              "settings": {
+                "userActivated": true,
+                "easyAIWorkflowOnboarded": true,
+                "firstSuccessfulWorkflowId": "q1A25iO3MekcKA8U",
+                "userActivatedAt": 1762357895173,
+                "npsSurvey": {
+                  "responded": true,
+                  "lastShownAt": 1762734649922
+                }
+              },
+              "role": "global:owner",
+              "disabled": false,
+              "mfaEnabled": false,
+              "lastActiveAt": "2026-02-28",
+              "isPending": false
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "tags": []
+}
