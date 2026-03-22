@@ -1,0 +1,225 @@
+{
+  "name": "Detector de Tipo de Mensaje + Conversión Binaria para IA",
+  "nodes": [
+    {
+      "id": "node_webhook",
+      "name": "Recibir Mensaje (Webhook/WhatsApp)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "message-receiver",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "notes": "Recibe mensajes POST desde WhatsApp Business API o cualquier webhook. Formato esperado: { type: 'text'|'audio'|'image', ...payload }"
+    },
+    {
+      "id": "node_switch",
+      "name": "Detectar Tipo de Mensaje",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [480, 300],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "typeValidation": "loose" },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body?.type ?? $json.type ?? '' }}",
+                    "rightValue": "text",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Texto"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "typeValidation": "loose" },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body?.type ?? $json.type ?? '' }}",
+                    "rightValue": "audio",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Voz"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "typeValidation": "loose" },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body?.type ?? $json.type ?? '' }}",
+                    "rightValue": "image",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Imagen"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      }
+    },
+    {
+      "id": "node_code_text",
+      "name": "Convertir Texto a Binario JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 100],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ====================================================\n// RAMA: TEXTO → Normalización a Binario JSON para IA\n// ====================================================\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const body = item.json.body ?? item.json;\n\n  // --- Extraer el texto según formato WhatsApp o genérico ---\n  const textContent =\n    body?.text?.body ??\n    body?.message ??\n    body?.content ??\n    body?.data ?? '';\n\n  // --- Convertir a bytes UTF-8 ---\n  const byteArray = [];\n  for (let i = 0; i < textContent.length; i++) {\n    const code = textContent.charCodeAt(i);\n    byteArray.push(code);\n  }\n\n  // --- Representación binaria de cada byte ---\n  const binaryRepresentation = byteArray\n    .map(b => b.toString(2).padStart(8, '0'));\n\n  // --- Base64 ---\n  const base64Content = Buffer.from(textContent, 'utf-8').toString('base64');\n\n  // --- HEX ---\n  const hexContent = Buffer.from(textContent, 'utf-8').toString('hex');\n\n  // --- Payload normalizado para la IA ---\n  const normalizedPayload = {\n    message_id: body?.id ?? `msg_text_${Date.now()}`,\n    timestamp: new Date().toISOString(),\n    source: body?.source ?? body?.from ?? 'webhook',\n    phone_number: body?.from ?? body?.phone ?? 'unknown',\n    type: 'text',\n    binary_metadata: {\n      encoding: 'utf-8',\n      mime_type: 'text/plain',\n      size_bytes: byteArray.length,\n      size_bits: byteArray.length * 8,\n      char_count: textContent.length\n    },\n    content: {\n      raw: textContent,\n      base64: base64Content,\n      hex: hexContent,\n      binary_representation: binaryRepresentation,\n      byte_array: byteArray\n    },\n    ai_instruction: `Eres un asistente que interpreta mensajes. Se recibió un MENSAJE DE TEXTO. Contenido original: \"${textContent}\". Responde al usuario de manera natural y útil.`,\n    processing_status: 'ready_for_ai'\n  };\n\n  results.push({ json: normalizedPayload });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node_code_voice",
+      "name": "Convertir Voz a Binario JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 300],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ====================================================\n// RAMA: VOZ/AUDIO → Normalización a Binario JSON para IA\n// ====================================================\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const body = item.json.body ?? item.json;\n\n  // --- Extraer datos del audio (formato WhatsApp o genérico) ---\n  const audioData = body?.audio ?? body?.voice ?? {};\n  const audioId = audioData?.id ?? body?.media_id ?? `audio_${Date.now()}`;\n  const mimeType = audioData?.mime_type ?? 'audio/ogg; codecs=opus';\n  const audioBase64 = audioData?.data ?? audioData?.base64 ?? '';\n  const durationSec = audioData?.duration ?? null;\n\n  // --- Procesar datos binarios si están disponibles ---\n  let magicBytesBinary = [];\n  let sizeBytes = 0;\n  let hexSample = '';\n\n  if (audioBase64) {\n    try {\n      const audioBuffer = Buffer.from(audioBase64, 'base64');\n      sizeBytes = audioBuffer.length;\n      // Primeros 16 bytes como muestra del binario (cabecera del archivo)\n      const sample = audioBuffer.slice(0, 16);\n      magicBytesBinary = Array.from(sample)\n        .map(b => b.toString(2).padStart(8, '0'));\n      hexSample = sample.toString('hex');\n    } catch (e) {\n      magicBytesBinary = [];\n    }\n  }\n\n  // --- Payload normalizado para la IA ---\n  const normalizedPayload = {\n    message_id: body?.id ?? `msg_voice_${Date.now()}`,\n    timestamp: new Date().toISOString(),\n    source: body?.source ?? body?.from ?? 'webhook',\n    phone_number: body?.from ?? body?.phone ?? 'unknown',\n    type: 'voice',\n    binary_metadata: {\n      encoding: 'binary',\n      mime_type: mimeType,\n      media_id: audioId,\n      size_bytes: sizeBytes,\n      size_bits: sizeBytes * 8,\n      duration_seconds: durationSec,\n      codec: mimeType.includes('opus') ? 'opus' : mimeType.includes('mp4') ? 'aac' : 'unknown'\n    },\n    content: {\n      media_id: audioId,\n      base64: audioBase64,\n      magic_bytes_binary: magicBytesBinary,\n      hex_sample: hexSample,\n      sha256: audioData?.sha256 ?? null,\n      download_url: audioData?.url ?? null\n    },\n    ai_instruction: `Eres un asistente que interpreta mensajes. Se recibió un MENSAJE DE VOZ. Media ID: ${audioId}. Tipo MIME: ${mimeType}. Duración: ${durationSec ?? 'desconocida'} segundos. Para responder: procesa el audio usando el media_id para descargarlo y transcribirlo, luego genera una respuesta apropiada.`,\n    processing_status: 'ready_for_ai'\n  };\n\n  results.push({ json: normalizedPayload });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node_code_image",
+      "name": "Convertir Imagen a Binario JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 500],
+      "parameters": {
+        "language": "javaScript",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ====================================================\n// RAMA: IMAGEN → Normalización a Binario JSON para IA\n// ====================================================\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const body = item.json.body ?? item.json;\n\n  // --- Extraer datos de la imagen ---\n  const imageData = body?.image ?? body?.photo ?? body?.sticker ?? {};\n  const imageId = imageData?.id ?? body?.media_id ?? `img_${Date.now()}`;\n  const mimeType = imageData?.mime_type ?? 'image/jpeg';\n  const imageBase64 = imageData?.data ?? imageData?.base64 ?? '';\n  const caption = imageData?.caption ?? body?.caption ?? '';\n\n  // --- Procesar datos binarios si están disponibles ---\n  let magicBytesBinary = [];\n  let detectedFormat = mimeType;\n  let sizeBytes = 0;\n  let hexSample = '';\n\n  if (imageBase64) {\n    try {\n      const imgBuffer = Buffer.from(imageBase64, 'base64');\n      sizeBytes = imgBuffer.length;\n\n      // Detectar formato por magic bytes (primeros 4 bytes)\n      const header = imgBuffer.slice(0, 4).toString('hex');\n      if (header.startsWith('ffd8ff'))    detectedFormat = 'image/jpeg';\n      else if (header.startsWith('89504e47')) detectedFormat = 'image/png';\n      else if (header.startsWith('47494638')) detectedFormat = 'image/gif';\n      else if (header.startsWith('52494646')) detectedFormat = 'image/webp';\n      else if (header.startsWith('25504446')) detectedFormat = 'application/pdf';\n\n      // Primeros 16 bytes en binario (cabecera del archivo)\n      const sample = imgBuffer.slice(0, 16);\n      magicBytesBinary = Array.from(sample)\n        .map(b => b.toString(2).padStart(8, '0'));\n      hexSample = sample.toString('hex');\n    } catch (e) {\n      magicBytesBinary = [];\n    }\n  }\n\n  // --- Payload normalizado para la IA ---\n  const normalizedPayload = {\n    message_id: body?.id ?? `msg_img_${Date.now()}`,\n    timestamp: new Date().toISOString(),\n    source: body?.source ?? body?.from ?? 'webhook',\n    phone_number: body?.from ?? body?.phone ?? 'unknown',\n    type: 'image',\n    binary_metadata: {\n      encoding: 'binary',\n      mime_type: detectedFormat,\n      media_id: imageId,\n      size_bytes: sizeBytes,\n      size_bits: sizeBytes * 8,\n      width: imageData?.width ?? null,\n      height: imageData?.height ?? null,\n      format_detected_from: imageBase64 ? 'magic_bytes' : 'mime_type_header'\n    },\n    content: {\n      media_id: imageId,\n      base64: imageBase64,\n      magic_bytes_binary: magicBytesBinary,\n      hex_sample: hexSample,\n      sha256: imageData?.sha256 ?? null,\n      caption: caption,\n      download_url: imageData?.url ?? null\n    },\n    ai_instruction: `Eres un asistente que interpreta mensajes. Se recibió una IMAGEN. Media ID: ${imageId}. Formato detectado: ${detectedFormat}. Caption: \"${caption || 'Sin descripción'}\". Tamaño: ${sizeBytes} bytes. Para responder: descarga la imagen usando el media_id, analízala visualmente y genera una respuesta contextual.`,\n    processing_status: 'ready_for_ai'\n  };\n\n  results.push({ json: normalizedPayload });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node_merge",
+      "name": "Unificar Salidas",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1040, 300],
+      "parameters": {
+        "mode": "passThrough",
+        "output": "input1"
+      },
+      "notes": "Une los 3 caminos (texto/voz/imagen) en uno solo para pasar al agente IA"
+    },
+    {
+      "id": "node_agent",
+      "name": "Agente IA Interpreta Mensaje",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1,
+      "position": [1320, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.ai_instruction }}\n\nDatos completos del mensaje en formato binario JSON:\n{{ JSON.stringify($json, null, 2) }}"
+      },
+      "notes": "Agente IA que recibe el payload normalizado. Necesita un modelo LLM conectado (OpenAI, Anthropic, etc.) como sub-nodo"
+    },
+    {
+      "id": "node_respond",
+      "name": "Responder al Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1600, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  message_id: $('Unificar Salidas').item.json.message_id,\n  message_type: $('Unificar Salidas').item.json.type,\n  processed_at: new Date().toISOString(),\n  ai_response: $json.output ?? $json.text ?? 'Procesado correctamente'\n}) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Recibir Mensaje (Webhook/WhatsApp)": {
+      "main": [
+        [{ "node": "Detectar Tipo de Mensaje", "type": "main", "index": 0 }]
+      ]
+    },
+    "Detectar Tipo de Mensaje": {
+      "main": [
+        [{ "node": "Convertir Texto a Binario JSON", "type": "main", "index": 0 }],
+        [{ "node": "Convertir Voz a Binario JSON", "type": "main", "index": 0 }],
+        [{ "node": "Convertir Imagen a Binario JSON", "type": "main", "index": 0 }]
+      ]
+    },
+    "Convertir Texto a Binario JSON": {
+      "main": [
+        [{ "node": "Unificar Salidas", "type": "main", "index": 0 }]
+      ]
+    },
+    "Convertir Voz a Binario JSON": {
+      "main": [
+        [{ "node": "Unificar Salidas", "type": "main", "index": 1 }]
+      ]
+    },
+    "Convertir Imagen a Binario JSON": {
+      "main": [
+        [{ "node": "Unificar Salidas", "type": "main", "index": 2 }]
+      ]
+    },
+    "Unificar Salidas": {
+      "main": [
+        [{ "node": "Agente IA Interpreta Mensaje", "type": "main", "index": 0 }]
+      ]
+    },
+    "Agente IA Interpreta Mensaje": {
+      "main": [
+        [{ "node": "Responder al Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "_documentation": {
+    "description": "Workflow que recibe mensajes vía WhatsApp Business API o webhook genérico, detecta el tipo (texto/voz/imagen), convierte el contenido a un formato binario JSON normalizado y lo envía a un Agente IA para interpretación.",
+    "flow": [
+      "1. WEBHOOK recibe POST con payload del mensaje",
+      "2. SWITCH detecta el tipo: text | audio | image",
+      "3. CODE (por rama) normaliza el contenido a binario JSON con metadata",
+      "4. MERGE unifica las 3 ramas en una sola salida",
+      "5. AGENTE IA recibe el ai_instruction + payload completo y genera respuesta",
+      "6. RESPOND TO WEBHOOK devuelve la respuesta al llamante"
+    ],
+    "payload_format": {
+      "example_text": {
+        "type": "text",
+        "body": { "type": "text", "text": { "body": "Hola, ¿cómo estás?" }, "from": "+521234567890" }
+      },
+      "example_audio": {
+        "type": "audio",
+        "body": { "type": "audio", "audio": { "id": "media_id_123", "mime_type": "audio/ogg; codecs=opus" }, "from": "+521234567890" }
+      },
+      "example_image": {
+        "type": "image",
+        "body": { "type": "image", "image": { "id": "media_id_456", "mime_type": "image/jpeg", "caption": "Mira esta foto" }, "from": "+521234567890" }
+      }
+    },
+    "required_credentials": [
+      "LLM model credential (OpenAI / Anthropic / etc.) conectado al nodo Agente IA"
+    ],
+    "whatsapp_webhook_verification": "Para WhatsApp Business API, agregar un nodo GET antes del webhook para verificar el challenge de Meta"
+  }
+}
