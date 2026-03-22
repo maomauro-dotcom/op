@@ -1,0 +1,223 @@
+{
+  "name": "prueba avanzada ia",
+  "nodes": [
+    {
+      "id": "node-upload-webhook",
+      "name": "📤 Subir Documento",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 200],
+      "webhookId": "upload-documento-rag",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upload-documento",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-format-doc",
+      "name": "📝 Formatear Documento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 200],
+      "parameters": {
+        "jsCode": "// Recibe body con { texto, titulo } desde el webhook\n// y formatea para insertar en el Vector Store.\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const body = item.json.body || item.json;\n  const texto = body.texto || body.content || body.text || '';\n  const titulo = body.titulo || body.title || body.filename || 'Documento sin título';\n\n  if (!texto.trim()) {\n    return [{ json: { error: 'No se encontró texto. Envía { \"texto\": \"...\", \"titulo\": \"...\" }' } }];\n  }\n\n  results.push({\n    json: {\n      pageContent: texto,\n      metadata: {\n        titulo,\n        fecha_carga: new Date().toISOString(),\n        fuente: 'webhook'\n      }\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node-vector-store-insert",
+      "name": "💾 Cargar en Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1,
+      "position": [680, 200],
+      "parameters": {
+        "mode": "insert"
+      }
+    },
+    {
+      "id": "node-text-splitter",
+      "name": "✂️ Dividir en Fragmentos",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [680, 420],
+      "parameters": {
+        "chunkSize": 1000,
+        "chunkOverlap": 200,
+        "options": {}
+      }
+    },
+    {
+      "id": "node-embeddings-insert",
+      "name": "🔢 Embeddings (Carga)",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.3,
+      "position": [900, 420],
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "zazPVE8L8qw6s0pH",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "id": "node-respond-webhook",
+      "name": "✅ Confirmar Carga",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [940, 200],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'Documento cargado correctamente en el vector store', titulo: $('📝 Formatear Documento').item.json.metadata?.titulo || 'sin título', timestamp: new Date().toISOString() }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "node-chat-trigger",
+      "name": "💬 Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [160, 700],
+      "webhookId": "prueba-avanzada-ia-chat",
+      "parameters": {
+        "options": {}
+      }
+    },
+    {
+      "id": "node-ai-agent",
+      "name": "🤖 Agente RAG",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [460, 700],
+      "parameters": {
+        "promptType": "auto",
+        "options": {
+          "systemMessage": "Eres un asistente experto en análisis documental con IA. Tu rol es responder preguntas basándote en los documentos disponibles en el vector store.\n\nREGLAS DE COMPORTAMIENTO:\n1. Siempre usa la herramienta 'buscar_en_documentos' antes de responder cualquier pregunta.\n2. Basa tus respuestas ÚNICAMENTE en la información encontrada en los documentos.\n3. Cita siempre el documento fuente cuando uses información de él.\n4. Si no encuentras información relevante, dilo claramente: 'No encontré información sobre esto en los documentos disponibles.'\n5. Responde en el mismo idioma que el usuario.\n6. Sé preciso, conciso y profesional.\n7. Si el usuario pregunta algo fuera de los documentos, puedes responder con tu conocimiento general, pero aclarando que es conocimiento propio y no de los documentos.\n\nFORMATO DE RESPUESTA:\n- Usa markdown cuando sea útil\n- Para respuestas largas, usa secciones claras\n- Siempre indica si la información viene de los documentos o de conocimiento general"
+        }
+      }
+    },
+    {
+      "id": "node-claude-llm",
+      "name": "🧠 Claude Sonnet",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [260, 920],
+      "parameters": {
+        "model": "claude-sonnet-4-5",
+        "options": {
+          "maxTokens": 2048,
+          "temperature": 0.3
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic_api",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "id": "node-memory",
+      "name": "💭 Memoria Conversación",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [460, 920],
+      "parameters": {
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "id": "node-vector-tool",
+      "name": "🔍 Herramienta: Buscar Docs",
+      "type": "@n8n/n8n-nodes-langchain.toolVectorStore",
+      "typeVersion": 1.1,
+      "position": [660, 920],
+      "parameters": {
+        "name": "buscar_en_documentos",
+        "description": "Busca información relevante en los documentos cargados previamente. Usa esta herramienta para responder preguntas sobre el contenido de los documentos. Recibe como entrada la consulta de búsqueda en lenguaje natural.",
+        "topK": 5
+      }
+    },
+    {
+      "id": "node-vector-store-retrieve",
+      "name": "📚 Vector Store (Búsqueda)",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1,
+      "position": [660, 1120],
+      "parameters": {
+        "mode": "retrieve"
+      }
+    },
+    {
+      "id": "node-embeddings-retrieve",
+      "name": "🔢 Embeddings (Búsqueda)",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.3,
+      "position": [860, 1120],
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "zazPVE8L8qw6s0pH",
+          "name": "OpenAi account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "📤 Subir Documento": {
+      "main": [[{ "node": "📝 Formatear Documento", "type": "main", "index": 0 }]]
+    },
+    "📝 Formatear Documento": {
+      "main": [[{ "node": "💾 Cargar en Vector Store", "type": "main", "index": 0 }]]
+    },
+    "✂️ Dividir en Fragmentos": {
+      "ai_textSplitter": [[{ "node": "💾 Cargar en Vector Store", "type": "ai_textSplitter", "index": 0 }]]
+    },
+    "🔢 Embeddings (Carga)": {
+      "ai_embedding": [[{ "node": "💾 Cargar en Vector Store", "type": "ai_embedding", "index": 0 }]]
+    },
+    "💾 Cargar en Vector Store": {
+      "main": [[{ "node": "✅ Confirmar Carga", "type": "main", "index": 0 }]]
+    },
+    "💬 Chat Trigger": {
+      "main": [[{ "node": "🤖 Agente RAG", "type": "main", "index": 0 }]]
+    },
+    "🧠 Claude Sonnet": {
+      "ai_languageModel": [[{ "node": "🤖 Agente RAG", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "💭 Memoria Conversación": {
+      "ai_memory": [[{ "node": "🤖 Agente RAG", "type": "ai_memory", "index": 0 }]]
+    },
+    "🔍 Herramienta: Buscar Docs": {
+      "ai_tool": [[{ "node": "🤖 Agente RAG", "type": "ai_tool", "index": 0 }]]
+    },
+    "📚 Vector Store (Búsqueda)": {
+      "ai_vectorStore": [[{ "node": "🔍 Herramienta: Buscar Docs", "type": "ai_vectorStore", "index": 0 }]]
+    },
+    "🔢 Embeddings (Búsqueda)": {
+      "ai_embedding": [[{ "node": "📚 Vector Store (Búsqueda)", "type": "ai_embedding", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
