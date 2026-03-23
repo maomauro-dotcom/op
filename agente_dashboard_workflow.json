@@ -1,0 +1,449 @@
+{
+  "name": "agente de consulta dashboard",
+  "active": false,
+  "nodes": [
+    {
+      "id": "node-webhook-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dashboard-query",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "webhook-header-auth",
+          "name": "Dashboard API Key"
+        }
+      }
+    },
+    {
+      "id": "node-ip-allowlist-02",
+      "name": "IP Allowlist Validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// IP Allowlist Validation (optional security layer)\n// Configure ALLOWED_IPS with your trusted IP ranges\nconst ALLOWED_IPS = [\n  '127.0.0.1',\n  '::1',\n  // Add your trusted IPs here, e.g.:\n  // '192.168.1.0/24',\n  // '10.0.0.0/8'\n];\n\n// If ALLOWED_IPS is empty, allow all IPs\nconst BYPASS_IP_CHECK = ALLOWED_IPS.length === 0;\n\nconst results = [];\nfor (const item of $input.all()) {\n  const headers = item.json.headers || {};\n  const clientIP = headers['x-forwarded-for'] || \n                   headers['x-real-ip'] || \n                   headers['cf-connecting-ip'] ||\n                   item.json.remoteAddress ||\n                   'unknown';\n  \n  const ipToCheck = clientIP.split(',')[0].trim();\n  \n  if (BYPASS_IP_CHECK || ALLOWED_IPS.includes(ipToCheck)) {\n    results.push({\n      json: {\n        ...item.json,\n        _validated_ip: ipToCheck,\n        _ip_check_passed: true\n      }\n    });\n  } else {\n    // Return 401 for blocked IPs\n    throw new Error(`IP not allowed: ${ipToCheck}`);\n  }\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node-sanitize-03",
+      "name": "Sanitize Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Payload Sanitization Node\n// - Cleans query text\n// - Validates session_id and user_id\n// - Prevents prompt injection\n\nconst PROMPT_INJECTION_PATTERNS = [\n  /ignore\\s+(previous|all|above|prior)\\s+(instructions?|prompts?|rules?)/gi,\n  /you\\s+are\\s+now\\s+(a|an)/gi,\n  /act\\s+as\\s+(a|an|if)/gi,\n  /jailbreak/gi,\n  /DAN\\s+mode/gi,\n  /system\\s*:\\s*you/gi,\n  /<\\s*system\\s*>/gi,\n  /\\\\n\\s*system:/gi,\n  /###\\s*system/gi,\n  /forget\\s+(your|all|previous)/gi,\n  /disregard\\s+(your|all|previous)/gi\n];\n\nconst MAX_QUERY_LENGTH = 2000;\nconst SESSION_ID_REGEX = /^[a-zA-Z0-9_\\-]{3,100}$/;\nconst USER_ID_REGEX = /^[a-zA-Z0-9_\\-]{3,50}$/;\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  const body = item.json.body || item.json;\n  \n  // Extract fields\n  let query = body.query;\n  let session_id = body.session_id;\n  let user_id = body.user_id;\n  \n  // Validate required fields\n  if (!query || typeof query !== 'string') {\n    throw new Error('Invalid request: query is required and must be a string');\n  }\n  if (!session_id || typeof session_id !== 'string') {\n    throw new Error('Invalid request: session_id is required and must be a string');\n  }\n  if (!user_id || typeof user_id !== 'string') {\n    throw new Error('Invalid request: user_id is required and must be a string');\n  }\n  \n  // Sanitize query\n  query = query.trim();\n  \n  // Check length\n  if (query.length > MAX_QUERY_LENGTH) {\n    throw new Error(`Query too long: maximum ${MAX_QUERY_LENGTH} characters allowed`);\n  }\n  \n  if (query.length === 0) {\n    throw new Error('Query cannot be empty');\n  }\n  \n  // Validate session_id format\n  if (!SESSION_ID_REGEX.test(session_id)) {\n    throw new Error('Invalid session_id format: only alphanumeric, underscore and dash allowed (3-100 chars)');\n  }\n  \n  // Validate user_id format\n  if (!USER_ID_REGEX.test(user_id)) {\n    throw new Error('Invalid user_id format: only alphanumeric, underscore and dash allowed (3-50 chars)');\n  }\n  \n  // Check for prompt injection patterns\n  for (const pattern of PROMPT_INJECTION_PATTERNS) {\n    if (pattern.test(query)) {\n      throw new Error('Request rejected: potential prompt injection detected');\n    }\n  }\n  \n  // Remove potential HTML/script tags\n  query = query.replace(/<[^>]*>/g, '');\n  \n  // Remove null bytes and control characters (except newlines and tabs)\n  query = query.replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');\n  \n  results.push({\n    json: {\n      query: query,\n      session_id: session_id,\n      user_id: user_id,\n      timestamp: new Date().toISOString(),\n      _sanitized: true\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node-agent-04",
+      "name": "AI Dashboard Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [980, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.query }}",
+        "systemMessage": "Eres un agente especializado en consultas de dashboard. Tu función es responder preguntas sobre métricas, KPIs y datos del sistema usando las herramientas disponibles.\n\nREGLAS:\n1. Solo puedes consultar datos, NUNCA modificar nada\n2. Usa get_kpis para métricas generales del dashboard\n3. Usa query_mongo para consultas específicas de datos\n4. Usa get_schema cuando no sepas la estructura de los datos\n5. Usa check_alerts para verificar alertas activas\n6. Responde siempre en el mismo idioma que la pregunta\n7. Si no tienes datos suficientes, dilo claramente\n8. No inventes métricas ni datos\n\nCONTEXTO: Tienes acceso a datos de un sistema de gestión. Las consultas más comunes son sobre conteos, estados, fechas y comparativas de periodos.",
+        "options": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $json.session_id }}"
+        }
+      }
+    },
+    {
+      "id": "node-anthropic-model-05",
+      "name": "Anthropic Claude",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 520],
+      "parameters": {
+        "model": "claude-3-5-sonnet-20241022",
+        "options": {
+          "temperature": 0.1,
+          "maxTokensToSample": 2048
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-credential",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "id": "node-postgres-memory-06",
+      "name": "PostgreSQL Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [980, 520],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Sanitize Payload').item.json.session_id }}",
+        "tableName": "conversation_memory",
+        "contextWindowLength": 20
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credential",
+          "name": "PostgreSQL Dashboard DB"
+        }
+      }
+    },
+    {
+      "id": "node-tool-query-mongo-07",
+      "name": "query_mongo",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [1100, 520],
+      "parameters": {
+        "name": "query_mongo",
+        "description": "Ejecuta consultas de solo lectura en MongoDB para obtener datos específicos. Recibe una consulta en formato JSON con los campos: collection (nombre de la colección), filter (filtro de búsqueda), projection (campos a retornar), limit (máximo de resultados, default 100), sort (ordenamiento). Retorna los documentos encontrados.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "WORKFLOW_ID_QUERY_MONGO"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "collection": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('collection', 'MongoDB collection name to query', 'string') }}",
+            "filter": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('filter', 'MongoDB filter query as JSON object', 'json') }}",
+            "projection": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('projection', 'MongoDB projection fields as JSON object', 'json') }}",
+            "limit": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('limit', 'Maximum number of documents to return (default 100, max 500)', 'number') }}",
+            "sort": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('sort', 'Sort order as JSON object, e.g. {\"createdAt\": -1}', 'json') }}"
+          },
+          "schema": [
+            {
+              "id": "collection",
+              "displayName": "collection",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "filter",
+              "displayName": "filter",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "object",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "projection",
+              "displayName": "projection",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "object",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "limit",
+              "displayName": "limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "sort",
+              "displayName": "sort",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "object",
+              "canBeUsedToMatch": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-tool-get-schema-08",
+      "name": "get_schema",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [1220, 520],
+      "parameters": {
+        "name": "get_schema",
+        "description": "Obtiene el esquema de una colección de MongoDB para conocer los campos disponibles y su estructura. Recibe el nombre de la colección y retorna una muestra representativa de los campos con sus tipos de datos.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "WORKFLOW_ID_GET_SCHEMA"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "collection": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('collection', 'MongoDB collection name to get schema for', 'string') }}"
+          },
+          "schema": [
+            {
+              "id": "collection",
+              "displayName": "collection",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-tool-get-kpis-09",
+      "name": "get_kpis",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [1340, 520],
+      "parameters": {
+        "name": "get_kpis",
+        "description": "Obtiene métricas y KPIs generales del dashboard. Puede recibir un período de tiempo (period: 'today', 'week', 'month', 'quarter', 'year') y una categoría opcional (category: 'sales', 'users', 'operations', 'all'). Retorna métricas aggregadas como totales, promedios, variaciones porcentuales y comparativas con períodos anteriores.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "WORKFLOW_ID_GET_KPIS"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "period": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('period', 'Time period for KPIs: today, week, month, quarter, year', 'string') }}",
+            "category": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('category', 'KPI category: sales, users, operations, all', 'string') }}"
+          },
+          "schema": [
+            {
+              "id": "period",
+              "displayName": "period",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-tool-check-alerts-10",
+      "name": "check_alerts",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [1460, 520],
+      "parameters": {
+        "name": "check_alerts",
+        "description": "Verifica las alertas activas del sistema. Puede filtrar por severidad (severity: 'critical', 'high', 'medium', 'low', 'all') y por categoría (category: 'system', 'data', 'business', 'all'). Retorna la lista de alertas activas con su descripción, severidad, timestamp y estado.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "WORKFLOW_ID_CHECK_ALERTS"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "severity": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('severity', 'Alert severity filter: critical, high, medium, low, all', 'string') }}",
+            "category": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('category', 'Alert category filter: system, data, business, all', 'string') }}"
+          },
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-respond-11",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1240, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  response: $json.output,\n  session_id: $('Sanitize Payload').item.json.session_id,\n  user_id: $('Sanitize Payload').item.json.user_id,\n  timestamp: new Date().toISOString()\n}) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "IP Allowlist Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IP Allowlist Validation": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize Payload": {
+      "main": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Dashboard Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Claude": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PostgreSQL Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_mongo": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_schema": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_kpis": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check_alerts": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Dashboard Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": null,
+  "tags": [
+    {
+      "name": "dashboard"
+    },
+    {
+      "name": "ai-agent"
+    },
+    {
+      "name": "security"
+    }
+  ]
+}
