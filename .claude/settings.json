@@ -5,7 +5,7 @@
       "args": ["-y", "n8n-mcp"],
       "env": {
         "N8N_API_URL": "https://botia-n8n.egrd7y.easypanel.host:5678",
-        "N8N_API_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmY2VhNGNmYi1lZTU1LTRiNjAtOTgxOC1jNjAyOTlmOGU5YmEiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzcyMzA4NDQxfQ.oicEGnvszHhTkkWeRHDokKY052-eFjuBxUJfyD6jW2Q"
+        "N8N_API_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmY2VhNGNmYi1lZTU1LTRiNjAtOTgxOC1jNjAyOTlmOGU5YmEiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzc1NDYzNzg5fQ.rPYH_2QAU3DPAvluDdMr6gBFyE8cAl7_7OHeK0fcJeU"
       }
     }
   },
